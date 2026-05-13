@@ -9,13 +9,15 @@ export type EmailForClassification = {
 export type EmailClassification = {
   category: string;
   priority: "low" | "normal" | "high";
+  recommendation: string;
   reason: string;
 };
 
-const ollamaHost = process.env.OLLAMA_HOST ?? "http://127.0.0.1:11434";
 const ollamaModel = process.env.OLLAMA_MODEL ?? "qwen2.5";
 
 export async function classifyEmail(email: EmailForClassification): Promise<EmailClassification> {
+  const ollamaHost = process.env.OLLAMA_HOST ?? "http://172.20.176.1:11434";
+
   const response = await fetch(`${ollamaHost}/api/chat`, {
     method: "POST",
     headers: {
@@ -29,10 +31,11 @@ export async function classifyEmail(email: EmailForClassification): Promise<Emai
         {
           role: "system",
           content: [
-            "Classify email into one category.",
-            "Return only JSON with keys: category, priority, reason.",
-            "priority must be one of: low, normal, high.",
-            "Use concise category names like action, finance, receipt, newsletter, personal, spam, travel, work, security, or unknown.",
+            "Classify this e-mail as: School (Mitchell, McCullough, AST, College Park, general Conroe ISD or the club/activity), Security, Financial or Unknown.",
+            "Recommend a priority level of low, normal or high.",
+            "Recommend the follow up action: Reply Requested, Follow Up, Archive or Delete.",
+            "When the follow up action is archive, suggest a retention period of 1 week, 1 month or 3 months.",
+            "Respond as a JSON object with the following format: { category: string, subcategory: string, priority: string, retention: string, recommendation: string, reason: string }"
           ].join(" "),
         },
         {
@@ -50,6 +53,7 @@ export async function classifyEmail(email: EmailForClassification): Promise<Emai
   const payload = (await response.json()) as { message?: { content?: string } };
   const content = payload.message?.content;
 
+  console.log("test");
   if (!content) {
     throw new Error("Ollama response did not include message content.");
   }
