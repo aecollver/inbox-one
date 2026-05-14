@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 
-import { InboxCache, type AccountUidRange } from "./inbox-cache";
-import { classifyRecentMail } from "./classify";
-import { listConnections, printConnections } from "./connection";
-import { listFolders, printFolders } from "./folder";
-import { createPolicyPreview, PolicyRepository, printPolicyPreview, type Policy } from "./policy";
+import { classifyRecentMail } from "../classify";
+import { listFolders, printFolders } from "../folder";
+import { InboxCache, type AccountUidRange } from "../inbox-cache";
+import { createPolicyPreview, PolicyRepository, printPolicyPreview, type Policy } from "../policy";
+import { listConnections, printConnections } from "./connection-list";
 
 function printUsage(): void {
   console.log(`Usage: npm run cli -- <command>

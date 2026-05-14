@@ -1,5 +1,2 @@
 node_modules/
 dist/
-credentials.json
-imap.txt
-inbox-cache.sqlite*

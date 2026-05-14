@@ -1,5 +1,6 @@
 export {
-  listConnections,
-  printConnections,
+  ConnectionRepository,
+  getConnectionsPath,
   type Connection,
-} from "./list";
+  type MailServerConfig,
+} from "./repository";

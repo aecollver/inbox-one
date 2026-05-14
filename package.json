@@ -3,10 +3,10 @@
   "version": "1.0.0",
   "private": true,
   "description": "",
-  "main": "dist/cli.js",
-  "types": "dist/cli.d.ts",
+  "main": "dist/cli/index.js",
+  "types": "dist/cli/index.d.ts",
   "bin": {
-    "inbox-one": "dist/cli.js"
+    "inbox-one": "dist/cli/index.js"
   },
   "files": [
     "dist"
@@ -15,7 +15,7 @@
     "build": "tsc",
     "test": "npm run build",
     "index": "npm run cli",
-    "cli": "node --import tsx src/cli.ts"
+    "cli": "node --import tsx src/cli/index.ts"
   },
   "dependencies": {
     "better-sqlite3": "^12.10.0",

@@ -1,18 +1,7 @@
 import { ImapFlow, type ESearchResult, type ListResponse } from "imapflow";
+import type { Connection } from "../connection/repository";
 import type { Policy } from "./repository";
-
-export type MailServerConfig = {
-  host: string;
-  port: number;
-  tls: boolean;
-};
-
-export type AccountConfig = {
-  name: string;
-  username: string;
-  appPassword: string;
-  imap: MailServerConfig;
-};
+export type { Connection } from "../connection/repository";
 
 export type FolderPolicyRulePreview = {
   accountName: string;
@@ -39,7 +28,7 @@ export type RetentionPreviewResult = {
   skippedPolicies: SkippedPolicyPreview[];
 };
 
-function createClient(account: AccountConfig): ImapFlow {
+function createClient(account: Connection): ImapFlow {
   if (!account.username || !account.appPassword) {
     throw new Error(`Account "${account.name}" is missing username or appPassword.`);
   }
@@ -70,7 +59,7 @@ function isSelectableFolder(folder: ListResponse): boolean {
 }
 
 function createRulePreview(
-  account: AccountConfig,
+  account: Connection,
   folder: ListResponse,
   oldMessages: number,
   policy: Policy,
@@ -104,7 +93,7 @@ function getSearchCount(searchResult: ESearchResult | number[] | false): number 
 }
 
 export async function previewRetentionRules(
-  account: AccountConfig,
+  account: Connection,
   policies: Policy[],
 ): Promise<RetentionPreviewResult> {
   const client = createClient(account);

@@ -1,8 +1,7 @@
-import { readFile } from "node:fs/promises";
-import path from "node:path";
+import { ConnectionRepository } from "../connection/repository";
 import {
   previewRetentionRules,
-  type AccountConfig,
+  type Connection,
   type FolderPolicyRulePreview,
   type SkippedPolicyPreview,
 } from "./preview-retention";
@@ -20,10 +19,6 @@ export type {
 } from "./preview-retention";
 export type { PolicySelectionCandidatePreview } from "./preview-selection";
 
-type CredentialsFile = {
-  accounts: AccountConfig[];
-};
-
 export type PolicyPreview = {
   generatedAt: string;
   connectionId?: string;
@@ -39,18 +34,6 @@ export type PolicyPreviewFilter = {
   connectionId?: string;
   folderPath?: string;
 };
-
-async function loadCredentials(): Promise<CredentialsFile> {
-  const credentialsPath = path.resolve(process.cwd(), "credentials.json");
-  const contents = await readFile(credentialsPath, "utf8");
-  const credentials = JSON.parse(contents) as CredentialsFile;
-
-  if (!Array.isArray(credentials.accounts) || credentials.accounts.length === 0) {
-    throw new Error("credentials.json must contain at least one account.");
-  }
-
-  return credentials;
-}
 
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -69,7 +52,7 @@ function printSelectionCriteria(rules: FolderPolicyRulePreview[]): void {
   }
 }
 
-async function previewAccount(account: AccountConfig, policies: Policy[]): Promise<{
+async function previewAccount(account: Connection, policies: Policy[]): Promise<{
   rules: FolderPolicyRulePreview[];
   selectionCandidates: PolicySelectionCandidatePreview[];
   skippedFolders: FolderPolicyRulePreview[];
@@ -110,7 +93,8 @@ async function previewAccount(account: AccountConfig, policies: Policy[]): Promi
 }
 
 export async function createPolicyPreview(filter: PolicyPreviewFilter = {}): Promise<PolicyPreview> {
-  const credentials = await loadCredentials();
+  const connectionRepository = new ConnectionRepository();
+  const connections = await connectionRepository.list();
   const policyRepository = new PolicyRepository();
   const policies = policyRepository.listPolicies(filter);
   policyRepository.close();
@@ -135,7 +119,7 @@ export async function createPolicyPreview(filter: PolicyPreviewFilter = {}): Pro
   }
 
   for (const [connectionId, connectionPolicies] of policiesByConnection) {
-    const account = credentials.accounts.find((candidate) => candidate.name === connectionId);
+    const account = connections.find((candidate) => candidate.name === connectionId);
 
     if (!account) {
       preview.skippedPolicies.push(...connectionPolicies.map((policy) => ({

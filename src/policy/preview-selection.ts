@@ -1,6 +1,6 @@
 import { MessageRepository } from "../message";
 import { embedText, matchEmailSelectionCriteria } from "../ollama";
-import type { AccountConfig } from "./preview-retention";
+import type { Connection } from "./preview-retention";
 import type { Policy } from "./repository";
 
 const selectionReviewLimit = Number(process.env.POLICY_SELECTION_REVIEW_LIMIT ?? 100);
@@ -40,7 +40,7 @@ type ParsedHeaders = {
 };
 
 export async function previewSelectionCandidates(
-  account: AccountConfig,
+  account: Connection,
   policies: Policy[],
 ): Promise<PolicySelectionCandidatePreview[]> {
   const policiesWithCriteria = policies.filter((policy) => policy.selectionCriteria?.trim());
@@ -110,7 +110,7 @@ export async function previewSelectionCandidates(
 async function matchMessageSelectionCriteria(
   selectionCriteria: string,
   message: SimilarLocalMessageSummary,
-  account: AccountConfig,
+  account: Connection,
   policy: Policy,
 ): Promise<{ matches: boolean; reason: string }> {
   try {
@@ -137,7 +137,7 @@ async function matchMessageSelectionCriteria(
 }
 
 async function loadLocalMessagesForAccount(
-  account: AccountConfig,
+  account: Connection,
   messageRepository: MessageRepository,
 ): Promise<LocalMessageSummary[]> {
   const prefix = getAccountMessagePrefix(account);
@@ -164,7 +164,7 @@ async function loadLocalMessagesForAccount(
   });
 }
 
-function getAccountMessagePrefix(account: AccountConfig): string {
+function getAccountMessagePrefix(account: Connection): string {
   return `${account.imap.host}:${account.imap.port}-${account.username}`.replace(/[^a-zA-Z0-9._@-]+/g, "-");
 }
 
@@ -290,7 +290,7 @@ async function getSelectionReviewMessages(
   messages: LocalMessageSummary[],
   selectionCriteria: string,
   policy: Policy,
-  account: AccountConfig,
+  account: Connection,
 ): Promise<SimilarLocalMessageSummary[]> {
   const selectionCriteriaEmbedding = await embedSelectionCriteria(selectionCriteria, account, policy);
   const similarMessages: SimilarLocalMessageSummary[] = [];
@@ -317,7 +317,7 @@ async function getSelectionReviewMessages(
 
 async function embedSelectionCriteria(
   selectionCriteria: string,
-  account: AccountConfig,
+  account: Connection,
   policy: Policy,
 ): Promise<number[]> {
   try {
@@ -339,7 +339,7 @@ function formatEmailEmbeddingText(message: LocalMessageSummary): string {
 async function embedEmailText(
   text: string,
   message: LocalMessageSummary,
-  account: AccountConfig,
+  account: Connection,
   policy: Policy,
 ): Promise<number[] | undefined> {
   try {

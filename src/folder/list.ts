@@ -1,23 +1,5 @@
-import { readFile } from "node:fs/promises";
-import path from "node:path";
 import { ImapFlow, type ListResponse } from "imapflow";
-
-type MailServerConfig = {
-  host: string;
-  port: number;
-  tls: boolean;
-};
-
-type AccountConfig = {
-  name: string;
-  username: string;
-  appPassword: string;
-  imap: MailServerConfig;
-};
-
-type CredentialsFile = {
-  accounts: AccountConfig[];
-};
+import { ConnectionRepository, type Connection } from "../connection/repository";
 
 export type Folder = {
   path: string;
@@ -28,19 +10,7 @@ export type Folder = {
   unseen?: number;
 };
 
-async function loadCredentials(): Promise<CredentialsFile> {
-  const credentialsPath = path.resolve(process.cwd(), "credentials.json");
-  const contents = await readFile(credentialsPath, "utf8");
-  const credentials = JSON.parse(contents) as CredentialsFile;
-
-  if (!Array.isArray(credentials.accounts) || credentials.accounts.length === 0) {
-    throw new Error("credentials.json must contain at least one account.");
-  }
-
-  return credentials;
-}
-
-function createClient(account: AccountConfig): ImapFlow {
+function createClient(account: Connection): ImapFlow {
   if (!account.username || !account.appPassword) {
     throw new Error(`Account "${account.name}" is missing username or appPassword.`);
   }
@@ -74,8 +44,8 @@ function toFolder(folder: ListResponse): Folder {
 }
 
 export async function listFolders(connectionName: string): Promise<Folder[]> {
-  const credentials = await loadCredentials();
-  const account = credentials.accounts.find((candidate) => candidate.name === connectionName);
+  const connectionRepository = new ConnectionRepository();
+  const account = await connectionRepository.findByName(connectionName);
 
   if (!account) {
     throw new Error(`Connection "${connectionName}" was not found.`);

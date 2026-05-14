@@ -1,27 +1,10 @@
-import { readFile } from "node:fs/promises";
 import path from "node:path";
 import Database from "better-sqlite3";
 import { ImapFlow, type FetchMessageObject } from "imapflow";
+import { ConnectionRepository, type Connection } from "./connection/repository";
 import { MessageRepository } from "./message";
 
 const fetchMessageLimit = 100;
-
-type MailServerConfig = {
-  host: string;
-  port: number;
-  tls: boolean;
-};
-
-type AccountConfig = {
-  name: string;
-  username: string;
-  appPassword: string;
-  imap: MailServerConfig;
-};
-
-type CredentialsFile = {
-  accounts: AccountConfig[];
-};
 
 type AccountUidState = {
   server_id: string;
@@ -42,11 +25,17 @@ export type AccountUidRange = {
 
 export class InboxCache {
   private readonly db: Database.Database;
+  private readonly connectionRepository: ConnectionRepository;
   private readonly messageRepository: MessageRepository;
 
-  constructor(dbPath = path.resolve(process.cwd(), "inbox-cache.sqlite"), messageRepository = new MessageRepository()) {
+  constructor(
+    dbPath = path.resolve(process.cwd(), "inbox-cache.sqlite"),
+    messageRepository = new MessageRepository(),
+    connectionRepository = new ConnectionRepository(),
+  ) {
     this.db = new Database(dbPath);
     this.messageRepository = messageRepository;
+    this.connectionRepository = connectionRepository;
     this.db.pragma("journal_mode = WAL");
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS inbox_account_uid_state (
@@ -61,9 +50,9 @@ export class InboxCache {
   }
 
   async fetchRecentMail(): Promise<void> {
-    const credentials = await this.loadCredentials();
+    const connections = await this.connectionRepository.list();
 
-    for (const account of credentials.accounts) {
+    for (const account of connections) {
       await this.printRecentMessages(account);
     }
   }
@@ -73,9 +62,9 @@ export class InboxCache {
   }
 
   async listAccountUidRanges(): Promise<AccountUidRange[]> {
-    const credentials = await this.loadCredentials();
+    const connections = await this.connectionRepository.list();
 
-    return credentials.accounts.map((account) => {
+    return connections.map((account) => {
       const state = this.getAccountUidState(account);
 
       return {
@@ -93,19 +82,7 @@ export class InboxCache {
     this.db.close();
   }
 
-  private async loadCredentials(): Promise<CredentialsFile> {
-    const credentialsPath = path.resolve(process.cwd(), "credentials.json");
-    const contents = await readFile(credentialsPath, "utf8");
-    const credentials = JSON.parse(contents) as CredentialsFile;
-
-    if (!Array.isArray(credentials.accounts) || credentials.accounts.length === 0) {
-      throw new Error("credentials.json must contain at least one account.");
-    }
-
-    return credentials;
-  }
-
-  private createClient(account: AccountConfig): ImapFlow {
+  private createClient(account: Connection): ImapFlow {
     if (!account.username || !account.appPassword) {
       throw new Error(`Account "${account.name}" is missing username or appPassword.`);
     }
@@ -123,7 +100,7 @@ export class InboxCache {
     });
   }
 
-  private async printRecentMessages(account: AccountConfig): Promise<void> {
+  private async printRecentMessages(account: Connection): Promise<void> {
     const client = this.createClient(account);
 
     try {
@@ -170,7 +147,7 @@ export class InboxCache {
     }
   }
 
-  private recordSeenUidRange(account: AccountConfig, messages: FetchMessageObject[]): void {
+  private recordSeenUidRange(account: Connection, messages: FetchMessageObject[]): void {
     if (messages.length === 0) {
       return;
     }
@@ -196,7 +173,7 @@ export class InboxCache {
       });
   }
 
-  private async writeMessages(account: AccountConfig, messages: FetchMessageObject[]): Promise<number> {
+  private async writeMessages(account: Connection, messages: FetchMessageObject[]): Promise<number> {
     let writtenMessageCount = 0;
 
     for (const message of messages) {
@@ -212,7 +189,7 @@ export class InboxCache {
     return writtenMessageCount;
   }
 
-  private getAccountUidState(account: AccountConfig): AccountUidState | undefined {
+  private getAccountUidState(account: Connection): AccountUidState | undefined {
     return this.db
       .prepare<[string, string], AccountUidState>(`
         SELECT server_id, username, min_seen_uid, max_seen_uid, updated_at
@@ -222,11 +199,11 @@ export class InboxCache {
       .get(this.getServerId(account), account.username);
   }
 
-  private getServerId(account: AccountConfig): string {
+  private getServerId(account: Connection): string {
     return `${account.imap.host}:${account.imap.port}`;
   }
 
-  private getMessageId(account: AccountConfig, uid: number): string {
+  private getMessageId(account: Connection, uid: number): string {
     const prefix = `${this.getServerId(account)}-${account.username}`;
     const safePrefix = prefix.replace(/[^a-zA-Z0-9._@-]+/g, "-");
 
