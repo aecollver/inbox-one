@@ -4,7 +4,7 @@ import { InboxCache, type AccountUidRange } from "./inbox-cache";
 import { classifyRecentMail } from "./classify";
 import { listConnections, printConnections } from "./connection";
 import { listFolders, printFolders } from "./folder";
-import { createPolicyPreview, printPolicyPreview } from "./policy";
+import { createPolicyPreview, PolicyRepository, printPolicyPreview, type Policy } from "./policy";
 
 function printUsage(): void {
   console.log(`Usage: npm run cli -- <command>
@@ -15,7 +15,13 @@ Commands:
   classify          Classify recent mail with Ollama
   connection ls     List configured connections
   folder ls <name>  List folders for a connection
-  policy preview [account] [folder]
+  policy ls [connection id] [folder]
+                    List configured policies
+  policy set <connection id> <folder> <retention days> [selection criteria]
+                    Set a folder retention policy
+  policy remove <connection id> <folder>
+                    Remove a folder retention policy
+  policy preview [connection id] [folder]
                     Preview policy cleanup rules`);
 }
 
@@ -41,6 +47,51 @@ function printAccountUidRanges(accounts: AccountUidRange[]): void {
   }));
 
   console.table(rows);
+}
+
+function printPolicies(policies: Policy[]): void {
+  if (policies.length === 0) {
+    console.log("No policies configured.");
+    return;
+  }
+
+  console.table(policies.map((policy) => ({
+    connectionId: policy.connectionId,
+    folder: policy.folderPath,
+    retentionDays: policy.retentionDays,
+    selectionCriteria: policy.selectionCriteria ?? "-",
+    updatedAt: policy.updatedAt,
+  })));
+}
+
+function printPolicy(policy: Policy): void {
+  console.table([{
+    connectionId: policy.connectionId,
+    folder: policy.folderPath,
+    retentionDays: policy.retentionDays,
+    selectionCriteria: policy.selectionCriteria ?? "-",
+    updatedAt: policy.updatedAt,
+  }]);
+}
+
+function parseRetentionDays(value: string | undefined): number {
+  const retentionDays = Number(value);
+
+  if (!Number.isInteger(retentionDays) || retentionDays < 0) {
+    throw new Error("retention days must be a non-negative integer.");
+  }
+
+  return retentionDays;
+}
+
+function findRetentionDaysIndex(command: string[]): number {
+  for (let index = command.length - 1; index >= 4; index -= 1) {
+    if (Number.isInteger(Number(command[index]))) {
+      return index;
+    }
+  }
+
+  throw new Error("retention days must be provided as a non-negative integer.");
 }
 
 async function main(): Promise<void> {
@@ -90,10 +141,56 @@ async function main(): Promise<void> {
     return;
   }
 
-  if (command[0] === "policy" && command[1] === "preview" && command.length >= 2) {
-    const accountName = command[2];
+  if (command[0] === "policy" && command[1] === "ls" && command.length >= 2) {
+    const policyRepository = new PolicyRepository();
+    const connectionId = command[2];
     const folderPath = command.slice(3).join(" ") || undefined;
-    printPolicyPreview(await createPolicyPreview({ accountName, folderPath }));
+
+    try {
+      printPolicies(policyRepository.listPolicies({ connectionId, folderPath }));
+    } finally {
+      policyRepository.close();
+    }
+
+    return;
+  }
+
+  if (command[0] === "policy" && command[1] === "set" && command.length >= 5) {
+    const policyRepository = new PolicyRepository();
+    const connectionId = command[2];
+    const retentionDaysIndex = findRetentionDaysIndex(command);
+    const retentionDays = parseRetentionDays(command[retentionDaysIndex]);
+    const folderPath = command.slice(3, retentionDaysIndex).join(" ");
+    const selectionCriteria = command.slice(retentionDaysIndex + 1).join(" ") || undefined;
+
+    try {
+      printPolicy(policyRepository.setPolicy({ connectionId, folderPath, retentionDays, selectionCriteria }));
+    } finally {
+      policyRepository.close();
+    }
+
+    return;
+  }
+
+  if (command[0] === "policy" && command[1] === "remove" && command.length >= 4) {
+    const policyRepository = new PolicyRepository();
+    const connectionId = command[2];
+    const folderPath = command.slice(3).join(" ");
+
+    try {
+      const removed = policyRepository.removePolicy(connectionId, folderPath);
+      console.log(removed ? "Policy removed." : "No matching policy found.");
+    } finally {
+      policyRepository.close();
+    }
+
+    return;
+  }
+
+  if (command[0] === "policy" && command[1] === "preview" && command.length >= 2) {
+    const connectionId = command[2];
+    const folderPath = command.slice(3).join(" ") || undefined;
+    printPolicyPreview(await createPolicyPreview({ connectionId, folderPath }));
     return;
   }
 

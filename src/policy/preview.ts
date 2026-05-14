@@ -1,48 +1,42 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { ImapFlow, type ESearchResult, type ListResponse } from "imapflow";
+import {
+  previewRetentionRules,
+  type AccountConfig,
+  type FolderPolicyRulePreview,
+  type SkippedPolicyPreview,
+} from "./preview-retention";
+import {
+  previewSelectionCandidates,
+  type PolicySelectionCandidatePreview,
+} from "./preview-selection";
+import { PolicyRepository, type Policy } from "./repository";
 
-const defaultRetentionDays = 365;
+const retentionPreviewEnabled = process.env.POLICY_RETENTION_PREVIEW_ENABLED === "1";
 
-type MailServerConfig = {
-  host: string;
-  port: number;
-  tls: boolean;
-};
-
-type AccountConfig = {
-  name: string;
-  username: string;
-  appPassword: string;
-  imap: MailServerConfig;
-};
+export type {
+  FolderPolicyRulePreview,
+  SkippedPolicyPreview,
+} from "./preview-retention";
+export type { PolicySelectionCandidatePreview } from "./preview-selection";
 
 type CredentialsFile = {
   accounts: AccountConfig[];
 };
 
-export type FolderPolicyRulePreview = {
-  accountName: string;
-  username: string;
-  provider: string;
-  folder: string;
-  retentionDays: number;
-  cutoffDate: string;
-  totalMessages: number;
-  oldMessages: number;
-  oldMessagesMayBeCapped: boolean;
-};
-
 export type PolicyPreview = {
   generatedAt: string;
-  accountName?: string;
+  connectionId?: string;
   folderPath?: string;
   rules: FolderPolicyRulePreview[];
+  selectionCandidates: PolicySelectionCandidatePreview[];
+  selectionPolicyCount: number;
   skippedFolders: FolderPolicyRulePreview[];
+  skippedPolicies: SkippedPolicyPreview[];
 };
 
 export type PolicyPreviewFilter = {
-  accountName?: string;
+  connectionId?: string;
   folderPath?: string;
 };
 
@@ -58,140 +52,105 @@ async function loadCredentials(): Promise<CredentialsFile> {
   return credentials;
 }
 
-function createClient(account: AccountConfig): ImapFlow {
-  if (!account.username || !account.appPassword) {
-    throw new Error(`Account "${account.name}" is missing username or appPassword.`);
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function printSelectionCriteria(rules: FolderPolicyRulePreview[]): void {
+  const rulesWithSelectionCriteria = rules.filter((rule) => rule.selectionCriteria?.trim());
+
+  if (rulesWithSelectionCriteria.length === 0) {
+    return;
   }
 
-  return new ImapFlow({
-    host: account.imap.host,
-    port: account.imap.port,
-    secure: account.imap.tls,
-    servername: account.imap.host,
-    auth: {
-      user: account.username,
-      pass: account.appPassword,
-    },
-    logger: false,
-  });
-}
-
-function getCutoffDate(retentionDays: number): Date {
-  const cutoffDate = new Date();
-  cutoffDate.setUTCDate(cutoffDate.getUTCDate() - retentionDays);
-  cutoffDate.setUTCHours(0, 0, 0, 0);
-
-  return cutoffDate;
-}
-
-function isSelectableFolder(folder: ListResponse): boolean {
-  return !folder.flags.has("\\Noselect") && !folder.flags.has("\\NonExistent");
-}
-
-function createRulePreview(
-  account: AccountConfig,
-  folder: ListResponse,
-  oldMessages: number,
-): FolderPolicyRulePreview {
-  const cutoffDate = getCutoffDate(defaultRetentionDays);
-
-  return {
-    accountName: account.name,
-    username: account.username,
-    provider: account.imap.host,
-    folder: folder.path,
-    retentionDays: defaultRetentionDays,
-    cutoffDate: cutoffDate.toISOString().slice(0, 10),
-    totalMessages: folder.status?.messages ?? 0,
-    oldMessages,
-    oldMessagesMayBeCapped: oldMessages === 1000 && (folder.status?.messages ?? 0) > oldMessages,
-  };
-}
-
-function getSearchCount(searchResult: ESearchResult | number[] | false): number {
-  if (!searchResult) {
-    return 0;
+  console.log("Selection criteria:");
+  for (const rule of rulesWithSelectionCriteria) {
+    console.log(`  ${rule.accountName}/${rule.folder}: ${rule.selectionCriteria}`);
   }
-
-  if (Array.isArray(searchResult)) {
-    return searchResult.length;
-  }
-
-  return searchResult.count ?? 0;
 }
 
-async function previewAccount(account: AccountConfig, filter: PolicyPreviewFilter): Promise<{
+async function previewAccount(account: AccountConfig, policies: Policy[]): Promise<{
   rules: FolderPolicyRulePreview[];
+  selectionCandidates: PolicySelectionCandidatePreview[];
   skippedFolders: FolderPolicyRulePreview[];
+  skippedPolicies: SkippedPolicyPreview[];
 }> {
-  const client = createClient(account);
-  const cutoffDate = getCutoffDate(defaultRetentionDays);
-  const rules: FolderPolicyRulePreview[] = [];
-  const skippedFolders: FolderPolicyRulePreview[] = [];
+  const skippedPolicies: SkippedPolicyPreview[] = [];
+  let selectionCandidates: PolicySelectionCandidatePreview[] = [];
 
   try {
-    await client.connect();
-    const folders = (await client.list({ statusQuery: { messages: true } }))
-      .filter((folder) => !filter.folderPath || folder.path === filter.folderPath);
-
-    if (filter.folderPath && folders.length === 0) {
-      throw new Error(`Folder "${filter.folderPath}" was not found for connection "${account.name}".`);
-    }
-
-    for (const folder of folders) {
-      if (!isSelectableFolder(folder)) {
-        skippedFolders.push(createRulePreview(account, folder, 0));
-        continue;
-      }
-
-      const mailbox = await client.mailboxOpen(folder.path, { readOnly: true });
-
-      try {
-        const oldMessageCount = mailbox.exists > 0
-          ? getSearchCount(await client.search({ before: cutoffDate }, {
-            uid: true,
-            returnOptions: ["COUNT"],
-          }))
-          : 0;
-
-        rules.push(createRulePreview(
-          account,
-          folder,
-          oldMessageCount,
-        ));
-      } finally {
-        await client.mailboxClose();
-      }
-    }
-  } finally {
-    await client.logout();
+    selectionCandidates = await previewSelectionCandidates(account, policies);
+  } catch (error: unknown) {
+    skippedPolicies.push(...policies
+      .filter((policy) => policy.selectionCriteria?.trim())
+      .map((policy) => ({
+        connectionId: policy.connectionId,
+        folderPath: policy.folderPath,
+        reason: `selection criteria preview failed: ${getErrorMessage(error)}`,
+      })));
   }
 
-  return { rules, skippedFolders };
+  const retentionPreview = retentionPreviewEnabled
+    ? await previewRetentionRules(account, policies)
+    : {
+      rules: [],
+      skippedFolders: [],
+      skippedPolicies: [],
+    };
+
+  return {
+    rules: retentionPreview.rules,
+    selectionCandidates,
+    skippedFolders: retentionPreview.skippedFolders,
+    skippedPolicies: [
+      ...skippedPolicies,
+      ...retentionPreview.skippedPolicies,
+    ],
+  };
 }
 
 export async function createPolicyPreview(filter: PolicyPreviewFilter = {}): Promise<PolicyPreview> {
   const credentials = await loadCredentials();
-  const accounts = filter.accountName
-    ? credentials.accounts.filter((account) => account.name === filter.accountName)
-    : credentials.accounts;
-
-  if (filter.accountName && accounts.length === 0) {
-    throw new Error(`Connection "${filter.accountName}" was not found.`);
-  }
+  const policyRepository = new PolicyRepository();
+  const policies = policyRepository.listPolicies(filter);
+  policyRepository.close();
 
   const preview: PolicyPreview = {
     generatedAt: new Date().toISOString(),
-    accountName: filter.accountName,
+    connectionId: filter.connectionId,
     folderPath: filter.folderPath,
     rules: [],
+    selectionCandidates: [],
+    selectionPolicyCount: policies.filter((policy) => policy.selectionCriteria?.trim()).length,
     skippedFolders: [],
+    skippedPolicies: [],
   };
 
-  for (const account of accounts) {
-    const accountPreview = await previewAccount(account, filter);
+  const policiesByConnection = new Map<string, Policy[]>();
+
+  for (const policy of policies) {
+    const connectionPolicies = policiesByConnection.get(policy.connectionId) ?? [];
+    connectionPolicies.push(policy);
+    policiesByConnection.set(policy.connectionId, connectionPolicies);
+  }
+
+  for (const [connectionId, connectionPolicies] of policiesByConnection) {
+    const account = credentials.accounts.find((candidate) => candidate.name === connectionId);
+
+    if (!account) {
+      preview.skippedPolicies.push(...connectionPolicies.map((policy) => ({
+        connectionId: policy.connectionId,
+        folderPath: policy.folderPath,
+        reason: "connection not found",
+      })));
+      continue;
+    }
+
+    const accountPreview = await previewAccount(account, connectionPolicies);
     preview.rules.push(...accountPreview.rules);
+    preview.selectionCandidates.push(...accountPreview.selectionCandidates);
     preview.skippedFolders.push(...accountPreview.skippedFolders);
+    preview.skippedPolicies.push(...accountPreview.skippedPolicies);
   }
 
   preview.rules.sort((a, b) =>
@@ -200,40 +159,79 @@ export async function createPolicyPreview(filter: PolicyPreviewFilter = {}): Pro
   preview.skippedFolders.sort((a, b) =>
     a.accountName.localeCompare(b.accountName) || a.folder.localeCompare(b.folder),
   );
+  preview.skippedPolicies.sort((a, b) =>
+    a.connectionId.localeCompare(b.connectionId) || a.folderPath.localeCompare(b.folderPath),
+  );
+  preview.selectionCandidates.sort((a, b) =>
+    a.accountName.localeCompare(b.accountName)
+    || a.folder.localeCompare(b.folder)
+    || a.subject.localeCompare(b.subject),
+  );
 
   return preview;
 }
 
 export function printPolicyPreview(preview: PolicyPreview): void {
   console.log(`Policy preview generated at ${preview.generatedAt}`);
-  console.log(`Rule: delete messages older than ${defaultRetentionDays} days per account/provider/folder`);
-  if (preview.accountName || preview.folderPath) {
-    console.log(`Filter: account=${preview.accountName ?? "*"} folder=${preview.folderPath ?? "*"}`);
+  console.log("Rule: delete messages older than each configured policy retentionDays value");
+  if (preview.connectionId || preview.folderPath) {
+    console.log(`Filter: connection=${preview.connectionId ?? "*"} folder=${preview.folderPath ?? "*"}`);
   }
 
-  if (preview.rules.length === 0) {
-    console.log("No matching selectable folders found.");
+  if (
+    preview.rules.length === 0
+    && preview.selectionCandidates.length === 0
+    && preview.skippedFolders.length === 0
+    && preview.skippedPolicies.length === 0
+  ) {
+    console.log("No policies configured.");
     return;
   }
 
-  console.table(preview.rules.map((rule) => ({
-    account: rule.accountName,
-    provider: rule.provider,
-    folder: rule.folder,
-    retentionDays: rule.retentionDays,
-    cutoffDate: rule.cutoffDate,
-    totalMessages: rule.totalMessages,
-    wouldDelete: rule.oldMessagesMayBeCapped ? `>=${rule.oldMessages}` : rule.oldMessages,
-  })));
+  if (preview.rules.length > 0) {
+    console.table(preview.rules.map((rule) => ({
+      account: rule.accountName,
+      provider: rule.provider,
+      folder: rule.folder,
+      retentionDays: rule.retentionDays,
+      cutoffDate: rule.cutoffDate,
+      totalMessages: rule.totalMessages,
+      wouldDelete: rule.oldMessagesMayBeCapped ? `>=${rule.oldMessages}` : rule.oldMessages,
+    })));
+    printSelectionCriteria(preview.rules);
+  }
 
   const totalOldMessages = preview.rules.reduce((total, rule) => total + rule.oldMessages, 0);
   const hasCappedCounts = preview.rules.some((rule) => rule.oldMessagesMayBeCapped);
   console.log(`Total messages that would be deleted: ${hasCappedCounts ? ">=" : ""}${totalOldMessages}`);
 
+  if (preview.selectionCandidates.length > 0) {
+    console.log("Messages that would be moved by selection criteria:");
+    console.table(preview.selectionCandidates.map((candidate) => ({
+      connectionId: candidate.connectionId,
+      account: candidate.accountName,
+      folder: candidate.folder,
+      messageId: candidate.messageId,
+      from: candidate.from ?? "(unknown sender)",
+      subject: candidate.subject,
+      date: candidate.date ?? "-",
+      reason: candidate.reason,
+    })));
+  } else if (preview.selectionPolicyCount > 0) {
+    console.log("No local messages matched policy selection criteria.");
+  }
+
   if (preview.skippedFolders.length > 0) {
     console.log("Skipped non-selectable folders:");
     for (const folder of preview.skippedFolders) {
       console.log(`  ${folder.accountName}/${folder.provider}/${folder.folder}`);
+    }
+  }
+
+  if (preview.skippedPolicies.length > 0) {
+    console.log("Skipped policies:");
+    for (const policy of preview.skippedPolicies) {
+      console.log(`  ${policy.connectionId}/${policy.folderPath}: ${policy.reason}`);
     }
   }
 }
