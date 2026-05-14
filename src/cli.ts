@@ -2,6 +2,9 @@
 
 import { InboxCache, type AccountUidRange } from "./inbox-cache";
 import { classifyRecentMail } from "./classify";
+import { listConnections, printConnections } from "./connection";
+import { listFolders, printFolders } from "./folder";
+import { createPolicyPreview, printPolicyPreview } from "./policy";
 
 function printUsage(): void {
   console.log(`Usage: npm run cli -- <command>
@@ -9,7 +12,11 @@ function printUsage(): void {
 Commands:
   ls accounts       List configured accounts and seen UID ranges
   fetch             Fetch recent mail and write .eml files
-  classify          Classify recent mail with Ollama`);
+  classify          Classify recent mail with Ollama
+  connection ls     List configured connections
+  folder ls <name>  List folders for a connection
+  policy preview [account] [folder]
+                    Preview policy cleanup rules`);
 }
 
 function formatUidRange(account: AccountUidRange): string {
@@ -70,6 +77,23 @@ async function main(): Promise<void> {
 
   if (command[0] === "classify" && command.length === 1) {
     await classifyRecentMail();
+    return;
+  }
+
+  if (command[0] === "connection" && command[1] === "ls" && command.length === 2) {
+    printConnections(await listConnections());
+    return;
+  }
+
+  if (command[0] === "folder" && command[1] === "ls" && command.length === 3) {
+    printFolders(await listFolders(command[2]));
+    return;
+  }
+
+  if (command[0] === "policy" && command[1] === "preview" && command.length >= 2) {
+    const accountName = command[2];
+    const folderPath = command.slice(3).join(" ") || undefined;
+    printPolicyPreview(await createPolicyPreview({ accountName, folderPath }));
     return;
   }
 
